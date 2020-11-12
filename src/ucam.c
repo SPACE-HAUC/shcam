@@ -15,7 +15,7 @@
 #include <shserial/shserial.h>
 #include <gpiodev/gpiodev.h>
 
-unsigned char ucam_baud_div1[13] = {
+unsigned char ucam_baud_div1[] = {
     0x1f,
     0x1f,
     0x1f,
@@ -31,7 +31,7 @@ unsigned char ucam_baud_div1[13] = {
     0x1,
     0x0,
 };
-unsigned char ucam_baud_div2[13] = {
+unsigned char ucam_baud_div2[] = {
     0x2f,
     0x17,
     0x0b,
@@ -350,10 +350,10 @@ int ucam_get_data(ucam *dev, unsigned char *data, ssize_t len, unsigned char err
 
 int ucam_soft_rst(ucam *dev, unsigned char rst_type)
 {
-    return ucam_cmd_with_ack(dev, UCAM_RESET, 0x1, 0x0, 0x0, 0x0);
+    return ucam_cmd_with_ack(dev, UCAM_RESET, rst_type & 0x1, 0x0, 0x0, 0x0);
 }
 
-int ucam_hard_rst(ucam *dev, unsigned char rst_type)
+int ucam_hard_rst(ucam *dev)
 {
     if (dev->rst < 0)
         return ucam_cmd_with_ack(dev, UCAM_RESET, 0x0, 0x0, 0x0, 0x0);
@@ -369,7 +369,6 @@ int ucam_hard_rst(ucam *dev, unsigned char rst_type)
 void ucam_destroy(ucam *dev)
 {
     close(dev->fd);
-    return 1;
 }
 
 static int ucam_cmd_with_ack(ucam *dev, unsigned char cmd, unsigned char p1, unsigned char p2, unsigned char p3, unsigned char p4)
@@ -420,3 +419,13 @@ static int ucam_cmd_without_ack(ucam *dev, unsigned char cmd, unsigned char p1, 
         return -UCAM_MAX_TRIES_EXCEED;
     return 1;
 }
+
+#ifdef UNIT_TEST
+int main()
+{
+    ucam cam;
+    ucam_init(&cam, "/dev/ttyS0", B115200, -1);
+    ucam_destroy(&cam);
+    return 0;
+}
+#endif

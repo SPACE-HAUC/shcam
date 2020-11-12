@@ -44,7 +44,7 @@ EDLDFLAGS:= -lm -lpthread $(EDLDFLAGS)
 LIBS += -lm -lpthread
 
 all: EDCFLAGS:= -O3 $(EDCFLAGS)
-test_ucam: EDCFLAGS:= -O2 $(EDCFLAGS)
+test_ucam: EDCFLAGS:= -O2 -DUNIT_TEST $(EDCFLAGS)
 
 BUILDDRV=drivers/shserial/shserial.o \
 drivers/gpiodev/gpiodev.o 
@@ -60,9 +60,9 @@ BUILDGUI= $(BUILDGUIBASE) \
 src/guimain.o
 
 BUILDOBJS=$(BUILDDRV) \
-src/ucam3.o
+src/ucam.o
 
-UCAMTARGET=adar_tester.out
+UCAMTARGET=ucam_tester.out
 GUITARGET=main.out
 
 all: $(GUITARGET)

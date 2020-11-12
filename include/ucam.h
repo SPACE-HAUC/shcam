@@ -234,12 +234,12 @@ typedef enum
  * @brief Lower byte of the baud rate divider
  * 
  */
-extern unsigned char ucam_baud_div1[13];
+extern unsigned char ucam_baud_div1[];
 /**
  * @brief Upper byte of the baud rate divider
  * 
  */
-extern unsigned char ucam_baud_div2[13];
+extern unsigned char ucam_baud_div2[];
 
 typedef enum
 {
