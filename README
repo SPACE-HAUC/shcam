@@ -1,0 +1,36 @@
+GUI Version:
+
+GUI Version possible because of the Dear ImGui library developed by ocornut (https://github.com/ocornut).
+ImGui parts are licensed under MIT License.
+Checkout imgui at https://github.com/ocornut/imgui .
+
+a. Requires the installation of libglfw3 (on Raspbian, execute sudo apt install libglfw3-dev).
+b. If you are connecting over SSH, enable X11 Forwarding by doing ssh -Y <user>@<ip> or ssh -Y <HOST> where HOST is defined in ~/.ssh/config.
+c. Execute make, it should build successfully.
+d. Execute sudo ./main.out, it should start the GUI program.
+
+In case you meet an error "Could not open DISPLAY", ensure the DISPLAY variable is set to <ip of computer you are SSH-ing from>:0.
+For example, execute export DISPLAY=192.168.1.12:0 if your client IP is 192.168.1.12.
+
+
+
+CLI Version:
+
+Requires libncurses built with multithreading support. To install:
+
+a. Obtain ncurses from https://ftp.gnu.org/pub/gnu/ncurses/ncurses-6.2.tar.gz (using wget https://ftp.gnu.org/pub/gnu/ncurses/ncurses-6.2.tar.gz)
+b. Extract the files (tar -xf ncurses-6.2.tar.gz)
+c. Go into the directory (cd ncurses-6.2)
+d. Configure with pthread and reentrant options (./configure --with-pthread --enable-reentrant)
+e. Execute make (on RPi use 4 threads: make -j4)
+f. Install: sudo make install
+
+Now you can run make curses to execute the program.
+
+Notes: 
+1. To clone with all submodules (device drivers), execute git clone --recurse-submodules.
+2. If changes are made to submodules,
+    a. cd into submodule directory and commit using usual means
+    b. To push submodule changes, execute git push origin HEAD:master
+    c. Finally, after pushing ALL submodule changes, return to root of the repo and commit the changes of submodules relative to the main repo.
+3. To pull the changes to the repo along with the repositories, use git pull --recurse-submodules

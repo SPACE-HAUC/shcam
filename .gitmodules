@@ -1,0 +1,6 @@
+[submodule "drivers/shserial"]
+	path = drivers/shserial
+	url = git@github.com:SPACE-HAUC/shserial
+[submodule "drivers/gpiodev"]
+	path = drivers/gpiodev
+	url = git@github.com:SPACE-HAUC/gpiodev
