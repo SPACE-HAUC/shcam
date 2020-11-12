@@ -318,14 +318,23 @@ int ucam_sync(ucam *dev);
  */
 int ucam_config(ucam *dev, unsigned char cmd);
 /**
- * @brief Get a picture of the configured type in the buffer
+ * @brief Snap a picture of the type specified in the device config
  * 
  * @param dev ucam device descriptor
- * @param data Picture data store location, has to be an uninitialized pointer, and the data has to be freed by the caller after use to avoid memory leak
- * @param len Picture data size location
- * @return int Non-negative on success, negative on error
+ * @param len length of snapped image stored in this variable
+ * @return int length of the snapped image
  */
-int ucam_get_picture(ucam *dev, unsigned char **data, ssize_t *len);
+int ucam_snap_picture(ucam *dev, ssize_t *len);
+/**
+ * @brief Get data after snapping the picture
+ * 
+ * @param dev ucam device descriptor
+ * @param data Pointer to where image data will be stored. Memory has to be allocated by the caller.
+ * @param len Length of image data to obtain
+ * @param err_check Enable error checking for JPEG data
+ * @return int length on success
+ */
+int ucam_get_data(ucam *dev, unsigned char *data, ssize_t len, unsigned char err_check);
 /**
  * @brief Soft reset the camera.
  * 

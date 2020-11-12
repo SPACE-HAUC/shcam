@@ -93,7 +93,7 @@ int ucam_init(ucam *dev, const char *fname, int baud, int rst)
     tcsetattr(dev->fd, TCSANOW, &tty);
     // Set up GPIO
     dev->rst = rst;
-    dev->sync = 0; // indicate lack of sync
+    dev->sync = 0;     // indicate lack of sync
     dev->pkg_sz = 512; // default package size
     if (rst > 0)
     {
@@ -180,6 +180,9 @@ int ucam_sync(ucam *dev)
     return -1;
 }
 
+static int ucam_cmd_with_ack(ucam *dev, unsigned char cmd, unsigned char p1, unsigned char p2, unsigned char p3, unsigned char p4);
+static int ucam_cmd_without_ack(ucam *dev, unsigned char cmd, unsigned char p1, unsigned char p2, unsigned char p3, unsigned char p4);
+
 int ucam_config(ucam *dev, unsigned char cmd)
 {
     switch (cmd)
@@ -205,7 +208,7 @@ int ucam_config(ucam *dev, unsigned char cmd)
     }
 }
 
-int ucam_get_picture(ucam *dev, unsigned char **data, ssize_t *len)
+int ucam_snap_picture(ucam *dev, ssize_t *len)
 {
     /**
      * Order of operation:
@@ -258,11 +261,115 @@ int ucam_get_picture(ucam *dev, unsigned char **data, ssize_t *len)
     num_bytes |= inbuf[4];
     num_bytes <<= 8;
     num_bytes |= inbuf[3];
-    int num_pkts = (num_bytes % (dev->pkg_sz - 6) > 0 ? 1 : 0) + num_bytes / (dev->pkg_sz - 6);
-    for (int i = 0; i < num_pkts; i++)
-    {
+    *len = num_bytes;
+    return num_bytes;
+}
 
+int ucam_get_data(ucam *dev, unsigned char *data, ssize_t len, unsigned char err_check)
+{
+    // send the acknowledgement to start receiving data
+    if (data == NULL)
+        return -1;
+    int status = 0;
+    int counter = 0;
+    do
+    {
+        status = ucam_cmd_without_ack(dev, UCAM_ACK, 0x0, 0x0, 0x0, 0x0);
+    } while (status != 1 || counter < UCAM_MAX_TRIES_EXCEED);
+    if (dev->pic_mode == 0x0) // JPEG
+    {
+        int rcvd = 0, count = 0;
+        while (rcvd < len) // still not received full image
+        {
+            // receive first four bytes
+            char tmpbuf[4];
+            while ((count = read(dev->fd, tmpbuf, 4)) != 4)
+                ;
+#ifdef UCAM_DEBUG
+            fprintf(stderr, "%s, %d: 0x%02x 0x%02x 0x%02x 0x%02x\n", __func__, __LINE__, tmpbuf[0], tmpbuf[1], tmpbuf[2], tmpbuf[3]);
+#endif
+            // calculate size of data to be received
+            ssize_t size = (ssize_t)tmpbuf[2] | ((ssize_t)tmpbuf[3]) << 8;
+            while ((count = read(dev->fd, &(data[rcvd]), size)) != size)
+                ; // receive the data
+#ifdef UCAM_DEBUG
+            fprintf(stderr, "%s, %d: 0x%02x 0x%02x 0x%02x 0x%02x\n", __func__, __LINE__, data[rcvd], data[rcvd + 1], data[rcvd + 2], data[rcvd + 3]);
+#endif
+            char ecc[2];
+            while ((count = read(dev->fd, ecc, 2)) != 2)
+                ; // receive the verify code
+#ifdef UCAM_DEBUG
+            fprintf(stderr, "%s, %d: 0x%02x 0x%02x\n", __func__, __LINE__, ecc[0], ecc[1]);
+#endif
+            if (err_check)
+            {
+                unsigned char rcvd_ecc = tmpbuf[0] + tmpbuf[1] + tmpbuf[2] + tmpbuf[3];
+                for (int i = 0; i < size; i++)
+                    rcvd_ecc += data[rcvd + i];
+                fprintf(stderr, "%s: Received checksum = 0x%02x, Calculated checksum = 0x%02x, Checksum %s\n", __func__, ecc[1], rcvd_ecc, rcvd_ecc == ecc[1] ? "PASS" : "FAIL");
+            }
+            rcvd += size; // increment number of received bytes
+            // send ack
+            if (rcvd < len)
+            {
+                char cmdbuf[] = {0xaa, UCAM_ACK, 0x0, 0x0, tmpbuf[0], tmpbuf[1]};
+                while ((count = write(dev->fd, cmdbuf, 6)) != 6)
+                    ;
+#ifdef UCAM_DEBUG
+                fprintf(stderr, "%s, %d: Sent ACK for package 0x%02x%02x\n", __func__, __LINE__, tmpbuf[0], tmpbuf[1]);
+#endif
+            }
+            else
+            {
+                char cmdbuf[] = {0xaa, UCAM_ACK, 0x0, 0x0, 0xf0, 0xf0};
+                while ((count = write(dev->fd, cmdbuf, 6)) != 6)
+                    ;
+#ifdef UCAM_DEBUG
+                fprintf(stderr, "%s, %d: Sent ACK for package 0x%02x%02x\n", __func__, __LINE__, tmpbuf[0], tmpbuf[1]);
+#endif
+            }
+        }
+        return len;
     }
+    else if (dev->pic_mode == 0x1) // RAW
+    {
+        int count = 0;
+        do
+        {
+            if (counter++ > 1)
+                usleep(100000); // give time for data to be available
+            count = read(dev->fd, data, len);
+        } while (count != len || counter < UCAM_CONFIG_MAX_RETRY);
+        if (counter >= UCAM_CONFIG_MAX_RETRY)
+            return -UCAM_MAX_TRIES_EXCEED;
+        if (ucam_cmd_without_ack(dev, UCAM_ACK, UCAM_DATA, 0x0, 0x1, 0x0) > 0)
+            return len;
+    }
+    return 0; // will never reach this point
+}
+
+int ucam_soft_rst(ucam *dev, unsigned char rst_type)
+{
+    return ucam_cmd_with_ack(dev, UCAM_RESET, 0x1, 0x0, 0x0, 0x0);
+}
+
+int ucam_hard_rst(ucam *dev, unsigned char rst_type)
+{
+    if (dev->rst < 0)
+        return ucam_cmd_with_ack(dev, UCAM_RESET, 0x0, 0x0, 0x0, 0x0);
+    else
+    {
+        gpioWrite(dev->rst, GPIO_LOW);
+        usleep(10000);
+        gpioWrite(dev->rst, GPIO_HIGH);
+    }
+    return 1;
+}
+
+void ucam_destroy(ucam *dev)
+{
+    close(dev->fd);
+    return 1;
 }
 
 static int ucam_cmd_with_ack(ucam *dev, unsigned char cmd, unsigned char p1, unsigned char p2, unsigned char p3, unsigned char p4)
