@@ -332,6 +332,7 @@ void MainWindow()
     bool dummy = false;
     ImGui::Begin("Main Window");
     ImGui::Checkbox("Display Image", &ImageWindowStat);
+    ImGui::Checkbox("Display Camera", &CamWindowStat);
     ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / ImGui::GetIO().Framerate, ImGui::GetIO().Framerate);
     ImGui::End();
 }
