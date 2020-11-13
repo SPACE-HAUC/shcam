@@ -41,7 +41,7 @@ endif
 EDCFLAGS:= -Wall -std=gnu11 $(EDCFLAGS)
 EDLDFLAGS:= -lm -lpthread $(EDLDFLAGS)
 
-LIBS += -lm -lpthread
+LIBS += -lm -lpthread -ljpeg
 
 all: EDCFLAGS:= -O3 $(EDCFLAGS)
 test_ucam: EDCFLAGS:= -O2 -DUNIT_TEST $(EDCFLAGS)
