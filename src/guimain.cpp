@@ -197,7 +197,6 @@ bool LoadTextureFromMem(const unsigned char *in_jpeg, ssize_t len, GLuint *out_t
     struct jpeg_decompress_struct cinfo;
     struct jpeg_error_mgr jerr;
     /* More stuff */
-    FILE *infile;      /* source file */
     JSAMPARRAY buffer; /* Output row buffer */
     int row_stride;    /* physical row width in output buffer */
 
@@ -290,7 +289,6 @@ bool LoadTextureFromMem(const unsigned char *in_jpeg, ssize_t len, GLuint *out_t
    * so as to simplify the setjmp error logic above.  (Actually, I don't
    * think that jpeg_destroy can do an error exit, but why assume anything...)
    */
-    fclose(infile);
     if (image_data == NULL)
         return false;
 
@@ -333,6 +331,7 @@ void MainWindow()
     ImGui::Begin("Main Window");
     ImGui::Checkbox("Display Image", &ImageWindowStat);
     ImGui::Checkbox("Display Camera", &CamWindowStat);
+    ImGui::Checkbox("Enable Camera", &enable_camera);
     ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / ImGui::GetIO().Framerate, ImGui::GetIO().Framerate);
     ImGui::End();
 }
@@ -363,19 +362,29 @@ void CamWindow(bool *active)
 
 void *update_image(void *ptr)
 {
+    unsigned long long int ctr = 0;
     while (!done)
     {
         if (enable_camera)
         {
+            fprintf(stderr, "%s: In loop %llu, ", __func__, ++ctr);
             ssize_t len = 0;
-            ucam_snap_picture((ucam *)ptr, &len);
-            unsigned char *img_data = (unsigned char *)malloc(len);
-            ucam_get_data((ucam *)ptr, img_data, len, 0);
-            LoadTextureFromMem(img_data, len, &my_image_texture, &my_image_width, &my_image_height);
-            free(img_data);
+            len = ucam_snap_picture((ucam *)ptr, &len);
+            fprintf(stderr, "snapped picture: length %ld, ", len);
+            if (len > 0)
+            {
+                unsigned char *img_data = (unsigned char *)malloc(len);
+                ucam_get_data((ucam *)ptr, img_data, len, 1);
+                fprintf(stderr, "got data, ");
+                LoadTextureFromMem(img_data, len, &my_image_texture, &my_image_width, &my_image_height);
+                fprintf(stderr, "loaded texture into memory.\n");
+                free(img_data);
+            }
+            fprintf(stderr, "\n");
         }
         usleep(16000); // 16 msec, try to get 60 Hz pictures
     }
+    fprintf(stderr, "%s: Done, returning...\n", __func__);
     return NULL;
 }
 
@@ -389,9 +398,11 @@ int main(int argc, char *argv[])
         return -1;
     }
     dev.pic_mode = 0x0; // compressed jpeg
-    dev.img_fmt = 0x7; // jpeg
+    dev.img_fmt = 0x7;  // jpeg
     dev.jpg_res = UCAM_JPG_480p;
+    dev.raw_res = 0;
     dev.pkg_sz = 512;
+    dev.skip_frames = 0;
     if (ucam_sync(&dev) < 0)
     {
         printf("Failed to sync, exiting\n");
@@ -432,7 +443,10 @@ int main(int argc, char *argv[])
     LoadTextureFromFile("test.jpeg", &mmy_image_texture, &mmy_image_width, &mmy_image_height);
     fprintf(stderr, "%s: %d\n", __func__, __LINE__);
     pthread_t thr;
-    pthread_create(&thr, NULL, &update_image, (void *)&dev);
+    pthread_attr_t attr;
+    pthread_attr_init(&attr);
+    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_JOINABLE);
+    pthread_create(&thr, &attr, update_image, (void *)&dev);
     while (!glfwWindowShouldClose(window))
     {
         // Poll and handle events (inputs, window resize, etc.)
@@ -472,9 +486,6 @@ int main(int argc, char *argv[])
         glfwMakeContextCurrent(window);
         glfwSwapBuffers(window);
     }
-    pthread_join(thr, NULL);
-    ucam_hard_rst(&dev);
-    ucam_destroy(&dev);
     // Cleanup
     ImGui_ImplOpenGL2_Shutdown();
     ImGui_ImplGlfw_Shutdown();
@@ -483,5 +494,13 @@ int main(int argc, char *argv[])
     glfwDestroyWindow(window);
     glfwTerminate();
 
+    done = 1;
+
+    pthread_join(thr, NULL);
+    printf("%s: Joined thread\n", __func__);
+    ucam_hard_rst(&dev);
+    printf("%s: Hard reset ucam\n", __func__);
+    ucam_destroy(&dev);
+    printf("%s: Destroyed ucam\n", __func__);
     return 0;
 }

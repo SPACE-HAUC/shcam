@@ -82,6 +82,9 @@ int ucam_init(ucam *dev, const char *fname, int baud, int rst)
         fprintf(stderr, "%s: Setup serial error %d, exiting...\n", __func__, dev->fd);
         return dev->fd;
     }
+#ifdef UCAM_DEBUG
+    fprintf(stderr, "%s: %d\n", __func__, __LINE__);
+#endif
     // set up additional attributes
     struct termios tty;
     tcgetattr(dev->fd, &tty);
@@ -104,6 +107,9 @@ int ucam_init(ucam *dev, const char *fname, int baud, int rst)
         }
         gpioWrite(rst, GPIO_HIGH); // push the pin high as chip is reset on the negative edge
     }
+#ifdef UCAM_DEBUG
+    fprintf(stderr, "%s: %d\n", __func__, __LINE__);
+#endif
     return 1;
 }
 
@@ -237,11 +243,45 @@ int ucam_snap_picture(ucam *dev, ssize_t *len)
     //     mode = 0x5;
     // else if (dev->pic_mode == 0x1)
     //     mode = 0x2;
-    if ((status = ucam_cmd_with_ack(dev, UCAM_GET_PIC, 0x1, 0x0, 0x0, 0x0)) < 0)
+    // if ((status = ucam_cmd_with_ack(dev, UCAM_GET_PIC, 0x1, 0x0, 0x0, 0x0)) < 0)
+    // {
+    //     fprintf(stderr, "%s: Error getting a picture\n", __func__);
+    //     return status;
+    // }
+    usleep(80000);
+    unsigned char cmd_buf[] = {0xaa, 0x4, 0x5, 0x0, 0x0, 0x0};
+    int count = 0;
+    do
     {
-        fprintf(stderr, "%s: Error getting a picture\n", __func__);
-        return status;
+        count = write(dev->fd, cmd_buf, 6);
+#ifdef UCAM_DEBUG
+        fprintf(stderr, "%s: Buffer: 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x, sent: %d bytes\n", __func__, cmd_buf[0], cmd_buf[1], cmd_buf[2], cmd_buf[3], cmd_buf[4], cmd_buf[5], count);
+#endif
+    } while (count != 6);
+    memset(cmd_buf, 0x0, 6);
+    usleep(150000);
+    int _counter = 0;
+    do
+    {
+        _counter++;
+        count = read(dev->fd, cmd_buf, 6);
+#ifdef UCAM_DEBUG
+        fprintf(stderr, "%s: Received: 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x, received: %d bytes\n", __func__, cmd_buf[0], cmd_buf[1], cmd_buf[2], cmd_buf[3], cmd_buf[4], cmd_buf[5], count);
+#endif
+        usleep(80000);
+        if (count == 6)
+            break;
+    } while (_counter < UCAM_CONFIG_MAX_RETRY);
+    if (_counter >= UCAM_CONFIG_MAX_RETRY)
+        return -UCAM_MAX_TRIES_EXCEED;
+    if (!(cmd_buf[0] == 0xaa && cmd_buf[1] == UCAM_ACK && cmd_buf[2] == UCAM_GET_PIC))
+    {
+        fprintf(stderr, "%s: Get pic error\n", __func__);
+        return -1;
     }
+
+    // check for ack
+
     int cond = 0;
     int counter = 0;
     unsigned char inbuf[6];
@@ -249,19 +289,36 @@ int ucam_snap_picture(ucam *dev, ssize_t *len)
     {
         counter++;
         int count = read(dev->fd, inbuf, 6);
+#ifdef UCAM_DEBUG
+        fprintf(stderr, "%s: Image size: 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x, received: %d bytes\n", __func__, inbuf[0], inbuf[1], inbuf[2], inbuf[3], inbuf[4], inbuf[5], count);
+#endif
         if (count < 6)
             continue;
-        cond = (inbuf[0] == 0xaa) && (inbuf[1] == 0xa) && (inbuf[2] == 0x1);
-    } while (counter < UCAM_MAX_TRIES_EXCEED || !cond);
+        cond = (inbuf[0] == 0xaa) && (inbuf[1] == 0xa) && (inbuf[2] == 0x5);
+        if (cond)
+            break;
+    } while (counter < UCAM_CONFIG_MAX_RETRY);
     if (counter >= UCAM_CONFIG_MAX_RETRY)
         return -UCAM_MAX_TRIES_EXCEED;
     // now we know the package size
-    int num_bytes = inbuf[5];
+    ssize_t num_bytes = inbuf[5];
+#ifdef UCAM_DEBUG
+    fprintf(stderr, "%s: Size of image: %ld\n", __func__, num_bytes);
+#endif
+    fflush(stderr);
     num_bytes <<= 8;
     num_bytes |= inbuf[4];
     num_bytes <<= 8;
     num_bytes |= inbuf[3];
+#ifdef UCAM_DEBUG
+    fprintf(stderr, "%s: Size of image: %ld\n", __func__, num_bytes);
+#endif
+    fflush(stderr);
     *len = num_bytes;
+#ifdef UCAM_DEBUG
+    fprintf(stderr, "%s: Size of image: %ld\n", __func__, num_bytes);
+#endif
+    fflush(stderr);
     return num_bytes;
 }
 
@@ -274,8 +331,11 @@ int ucam_get_data(ucam *dev, unsigned char *data, ssize_t len, unsigned char err
     int counter = 0;
     do
     {
+        counter++;
         status = ucam_cmd_without_ack(dev, UCAM_ACK, 0x0, 0x0, 0x0, 0x0);
-    } while (status != 1 || counter < UCAM_MAX_TRIES_EXCEED);
+        if (status == 1)
+            break;
+    } while (counter < UCAM_MAX_TRIES_EXCEED);
     if (dev->pic_mode == 0x0) // JPEG
     {
         int rcvd = 0, count = 0;
@@ -283,21 +343,46 @@ int ucam_get_data(ucam *dev, unsigned char *data, ssize_t len, unsigned char err
         {
             // receive first four bytes
             char tmpbuf[4];
-            while ((count = read(dev->fd, tmpbuf, 4)) != 4)
-                ;
+            memset(tmpbuf, 0x0, 4);
+            usleep(10000);
+            // while ((count = read(dev->fd, tmpbuf, 4)) != 4)
+            //     ;
+            int tot = 0;
+            counter = 0;
+            while (tot < 4 && counter < UCAM_CONFIG_MAX_RETRY)
+            {
+                counter++;
+                tot += read(dev->fd, &tmpbuf[tot], 4 - tot);
+                fprintf(stderr, "%s %d: Received %d out of 4\n", __func__, __LINE__, tot);
+            }
 #ifdef UCAM_DEBUG
-            fprintf(stderr, "%s, %d: 0x%02x 0x%02x 0x%02x 0x%02x\n", __func__, __LINE__, tmpbuf[0], tmpbuf[1], tmpbuf[2], tmpbuf[3]);
+            fprintf(stderr, "%s, %d %d: 0x%02x 0x%02x 0x%02x 0x%02x\n", __func__, __LINE__, tot, tmpbuf[0], tmpbuf[1], tmpbuf[2], tmpbuf[3]);
 #endif
             // calculate size of data to be received
+            if (tmpbuf[0] == 0xaa && tmpbuf[1] == 0xf)
+            {
+                fprintf(stderr, "%s %d: NAC received, returning\n", __func__, __LINE__);
+                return -1;
+            }
             ssize_t size = (ssize_t)tmpbuf[2] | ((ssize_t)tmpbuf[3]) << 8;
-            while ((count = read(dev->fd, &(data[rcvd]), size)) != size)
-                ; // receive the data
+#ifdef UCAM_DEBUG
+            fprintf(stderr, "%s %d: Receiving %d bytes\n", __func__, __LINE__, size);
+#endif
+            usleep(size * 100);
+            int offset = 0;
+            while (offset < size)
+            {
+                count = read(dev->fd, &(data[rcvd + offset]), size - offset);
+                fprintf(stderr, "%s %d: Actually received %d, %d of %d\n", __func__, __LINE__, count, offset, size); // receive the data
+                offset += count;
+            }
 #ifdef UCAM_DEBUG
             fprintf(stderr, "%s, %d: 0x%02x 0x%02x 0x%02x 0x%02x\n", __func__, __LINE__, data[rcvd], data[rcvd + 1], data[rcvd + 2], data[rcvd + 3]);
 #endif
-            char ecc[2];
-            while ((count = read(dev->fd, ecc, 2)) != 2)
-                ; // receive the verify code
+            usleep(200);
+            char ecc[2] = {0x0, };
+            count = read(dev->fd, ecc, 2);
+            fprintf(stderr, "%s %d: Actually received %d\n", __func__, __LINE__, count); // receive the data
 #ifdef UCAM_DEBUG
             fprintf(stderr, "%s, %d: 0x%02x 0x%02x\n", __func__, __LINE__, ecc[0], ecc[1]);
 #endif
@@ -306,17 +391,17 @@ int ucam_get_data(ucam *dev, unsigned char *data, ssize_t len, unsigned char err
                 unsigned char rcvd_ecc = tmpbuf[0] + tmpbuf[1] + tmpbuf[2] + tmpbuf[3];
                 for (int i = 0; i < size; i++)
                     rcvd_ecc += data[rcvd + i];
-                fprintf(stderr, "%s: Received checksum = 0x%02x, Calculated checksum = 0x%02x, Checksum %s\n", __func__, ecc[1], rcvd_ecc, rcvd_ecc == ecc[1] ? "PASS" : "FAIL");
+                fprintf(stderr, "%s: Received checksum = 0x%02x, Calculated checksum = 0x%02x, Checksum %s\n", __func__, ecc[1], rcvd_ecc, rcvd_ecc == ecc[0] ? "PASS" : "FAIL");
             }
             rcvd += size; // increment number of received bytes
             // send ack
             if (rcvd < len)
             {
-                char cmdbuf[] = {0xaa, UCAM_ACK, 0x0, 0x0, tmpbuf[0], tmpbuf[1]};
+                char cmdbuf[] = {0xaa, 0xe, 0x0, 0x0, tmpbuf[0], tmpbuf[1]};
                 while ((count = write(dev->fd, cmdbuf, 6)) != 6)
                     ;
 #ifdef UCAM_DEBUG
-                fprintf(stderr, "%s, %d: Sent ACK for package 0x%02x%02x\n", __func__, __LINE__, tmpbuf[0], tmpbuf[1]);
+                fprintf(stderr, "%s, %d: Sent ACK for package 0x%02x%02x\n", __func__, __LINE__, tmpbuf[1], tmpbuf[0]);
 #endif
             }
             else
@@ -325,7 +410,7 @@ int ucam_get_data(ucam *dev, unsigned char *data, ssize_t len, unsigned char err
                 while ((count = write(dev->fd, cmdbuf, 6)) != 6)
                     ;
 #ifdef UCAM_DEBUG
-                fprintf(stderr, "%s, %d: Sent ACK for package 0x%02x%02x\n", __func__, __LINE__, tmpbuf[0], tmpbuf[1]);
+                fprintf(stderr, "%s, %d: Sent ACK for package 0x%02x%02x\n", __func__, __LINE__, tmpbuf[1], tmpbuf[0]);
 #endif
             }
         }
@@ -360,7 +445,7 @@ int ucam_hard_rst(ucam *dev)
     else
     {
         gpioWrite(dev->rst, GPIO_LOW);
-        usleep(10000);
+        usleep(100000);
         gpioWrite(dev->rst, GPIO_HIGH);
     }
     return 1;
@@ -384,10 +469,17 @@ static int ucam_cmd_with_ack(ucam *dev, unsigned char cmd, unsigned char p1, uns
         counter++;             // set maximum number of tries
         memset(inbuf, 0x0, 6); // clear out
         count = write(dev->fd, cmd_buf, 6);
+#ifdef UCAM_DEBUG
+        fprintf(stderr, "%s: Command: 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x, sent: %d bytes\n", __func__, cmd_buf[0], cmd_buf[1], cmd_buf[2], cmd_buf[3], cmd_buf[4], cmd_buf[5], count);
+#endif
         if (count < 6)
-            continue;                    // try to write again if write failed
+            continue; // try to write again if write failed
+        usleep(80000);
         count = read(dev->fd, inbuf, 6); // read 6 bytes
-        if (count < 6)                   // read failed
+#ifdef UCAM_DEBUG
+        fprintf(stderr, "%s: Counter = %d Received: 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x\n", __func__, counter, inbuf[0], inbuf[1], inbuf[2], inbuf[3], inbuf[4], inbuf[5]);
+#endif
+        if (count < 6) // read failed
             continue;
         // if we reach here we shall evaluate the condition
         cond = (inbuf[0] == 0xaa) && (inbuf[1] == UCAM_ACK) && (inbuf[2] == cmd);
@@ -396,7 +488,9 @@ static int ucam_cmd_with_ack(ucam *dev, unsigned char cmd, unsigned char p1, uns
             fprintf(stderr, "%s: NAC received while trying to send command 0x%02x with error code 0x%02x\n", __func__, cmd, inbuf[4]);
             return inbuf[4] > 0 ? -inbuf[4] : inbuf[4]; // errors are always negative
         }
-    } while (counter < UCAM_CONFIG_MAX_RETRY || !cond); // check on inbuf and check if counter has exceeded
+        if (cond)
+            break;
+    } while (counter < UCAM_CONFIG_MAX_RETRY); // check on inbuf and check if counter has exceeded
     if (counter >= UCAM_CONFIG_MAX_RETRY)
         return -UCAM_MAX_TRIES_EXCEED;
     return 1;
