@@ -358,4 +358,6 @@ int ucam_hard_rst(ucam *dev);
  */
 void ucam_destroy(ucam *dev);
 
+int camera_Jpg(int stream, unsigned char* mem, int debug);
+
 #endif // __UCAM_III_H

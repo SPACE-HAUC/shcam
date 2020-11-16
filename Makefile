@@ -43,8 +43,8 @@ EDLDFLAGS:= -lm -lpthread $(EDLDFLAGS)
 
 LIBS += -lm -lpthread -ljpeg
 
-all: EDCFLAGS:= -O3 $(EDCFLAGS)
-test_ucam: EDCFLAGS:= -O2 -DUNIT_TEST $(EDCFLAGS)
+all: EDCFLAGS:= -O2 $(EDCFLAGS)
+test_ucam: EDCFLAGS:= -Os -DUNIT_TEST $(EDCFLAGS)
 
 BUILDDRV=drivers/shserial/shserial.o \
 drivers/gpiodev/gpiodev.o 

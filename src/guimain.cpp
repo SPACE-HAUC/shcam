@@ -363,24 +363,29 @@ void CamWindow(bool *active)
 void *update_image(void *ptr)
 {
     unsigned long long int ctr = 0;
+    usleep(2000000);
     while (!done)
     {
         if (enable_camera)
         {
             fprintf(stderr, "%s: In loop %llu, ", __func__, ++ctr);
-            ssize_t len = 0;
-            len = ucam_snap_picture((ucam *)ptr, &len);
-            fprintf(stderr, "snapped picture: length %ld, ", len);
-            if (len > 0)
-            {
-                unsigned char *img_data = (unsigned char *)malloc(len);
-                ucam_get_data((ucam *)ptr, img_data, len, 1);
-                fprintf(stderr, "got data, ");
-                LoadTextureFromMem(img_data, len, &my_image_texture, &my_image_width, &my_image_height);
-                fprintf(stderr, "loaded texture into memory.\n");
-                free(img_data);
-            }
-            fprintf(stderr, "\n");
+            // ssize_t len = 0;
+            // len = ucam_snap_picture((ucam *)ptr, &len);
+            // fprintf(stderr, "snapped picture: length %ld, ", len);
+            // if (len > 0)
+            // {
+            //     unsigned char *img_data = (unsigned char *)malloc(len);
+            //     ucam_get_data((ucam *)ptr, img_data, len, 1);
+            //     fprintf(stderr, "got data, ");
+            //     LoadTextureFromMem(img_data, len, &my_image_texture, &my_image_width, &my_image_height);
+            //     fprintf(stderr, "loaded texture into memory.\n");
+            //     free(img_data);
+            // }
+            // fprintf(stderr, "\n");
+            unsigned char *img_data = (unsigned char *) malloc (2 * 640 * 4800); // max mem size for 640x480 RGB565 image
+            int len = camera_Jpg(((ucam *)ptr)->fd, img_data, 1);
+            LoadTextureFromMem(img_data, len, &my_image_texture, &my_image_width, &my_image_height);
+            free(img_data);
         }
         usleep(16000); // 16 msec, try to get 60 Hz pictures
     }

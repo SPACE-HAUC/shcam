@@ -8,10 +8,17 @@
  * @copyright Copyright (c) 2020
  * 
  */
-#include <string.h>
 #include <ucam.h>
-#include <termios.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdint.h>
+#include <sys/ioctl.h>
+#include <fcntl.h>
+#include <stdint.h>
 #include <unistd.h>
+#include <errno.h>
+#include <string.h>
+#include <termios.h>
 #include <shserial/shserial.h>
 #include <gpiodev/gpiodev.h>
 
@@ -77,7 +84,7 @@ int ucam_init(ucam *dev, const char *fname, int baud, int rst)
     if (status < 0)
         return status;
     // Open the device
-    if ((dev->fd = setup_serial(fname, baud, 0, 0)) < 0)
+    if ((dev->fd = open(fname, O_RDWR | O_NOCTTY | O_NDELAY)) < 0)
     {
         fprintf(stderr, "%s: Setup serial error %d, exiting...\n", __func__, dev->fd);
         return dev->fd;
@@ -336,6 +343,8 @@ int ucam_get_data(ucam *dev, unsigned char *data, ssize_t len, unsigned char err
         if (status == 1)
             break;
     } while (counter < UCAM_MAX_TRIES_EXCEED);
+    // get the first packet
+
     if (dev->pic_mode == 0x0) // JPEG
     {
         int rcvd = 0, count = 0;
@@ -344,7 +353,7 @@ int ucam_get_data(ucam *dev, unsigned char *data, ssize_t len, unsigned char err
             // receive first four bytes
             char tmpbuf[4];
             memset(tmpbuf, 0x0, 4);
-            usleep(10000);
+            // usleep(10000);
             // while ((count = read(dev->fd, tmpbuf, 4)) != 4)
             //     ;
             int tot = 0;
@@ -380,7 +389,7 @@ int ucam_get_data(ucam *dev, unsigned char *data, ssize_t len, unsigned char err
             fprintf(stderr, "%s, %d: 0x%02x 0x%02x 0x%02x 0x%02x\n", __func__, __LINE__, data[rcvd], data[rcvd + 1], data[rcvd + 2], data[rcvd + 3]);
 #endif
             usleep(200);
-            char ecc[2] = {0x0, };
+            char ecc[2] = {0x0, 0x0};
             count = read(dev->fd, ecc, 2);
             fprintf(stderr, "%s %d: Actually received %d\n", __func__, __LINE__, count); // receive the data
 #ifdef UCAM_DEBUG
@@ -391,15 +400,14 @@ int ucam_get_data(ucam *dev, unsigned char *data, ssize_t len, unsigned char err
                 unsigned char rcvd_ecc = tmpbuf[0] + tmpbuf[1] + tmpbuf[2] + tmpbuf[3];
                 for (int i = 0; i < size; i++)
                     rcvd_ecc += data[rcvd + i];
-                fprintf(stderr, "%s: Received checksum = 0x%02x, Calculated checksum = 0x%02x, Checksum %s\n", __func__, ecc[1], rcvd_ecc, rcvd_ecc == ecc[0] ? "PASS" : "FAIL");
+                fprintf(stderr, "%s: Received checksum = 0x%02x, Calculated checksum = 0x%02x, Checksum %s\n", __func__, ecc[0], rcvd_ecc, rcvd_ecc == ecc[0] ? "PASS" : "FAIL");
             }
             rcvd += size; // increment number of received bytes
             // send ack
+            usleep(50000);
             if (rcvd < len)
             {
-                char cmdbuf[] = {0xaa, 0xe, 0x0, 0x0, tmpbuf[0], tmpbuf[1]};
-                while ((count = write(dev->fd, cmdbuf, 6)) != 6)
-                    ;
+                ucam_cmd_without_ack(dev, UCAM_ACK, 0x0, 0x0, tmpbuf[0], tmpbuf[1]);
 #ifdef UCAM_DEBUG
                 fprintf(stderr, "%s, %d: Sent ACK for package 0x%02x%02x\n", __func__, __LINE__, tmpbuf[1], tmpbuf[0]);
 #endif
@@ -514,12 +522,180 @@ static int ucam_cmd_without_ack(ucam *dev, unsigned char cmd, unsigned char p1, 
     return 1;
 }
 
+int camera_Jpg(int stream, unsigned char *mem, int debug)
+{
+    /* This function retrieves the JPEG from the camera. It is currently
+  setup for siz 512 byte packages, and may not work for smaller sizes.
+  Refer to USERGUIDE.md and the datasheet for further details.
+  */
+    char _GET[] = {0xAA, 0x04, 0x05, 0x00, 0x00, 0x00};
+    char _GET_ACK[] = {0x0AA, 0x0E, 0x04, 0x00, 0x00, 0x00};
+    char _DATA[] = {0xAA, 0x0A, 0x05, 0x00, 0x00, 0x00};
+    char _DACK[] = {0xAA, 0x0E, 0x00, 0x00, 0x00, 0x00};
+    char received[512];
+    char inbuff[6];
+    int count;
+    int pcknum = 1;
+    int size = 0;
+    int temp = 0;
+
+    count = write(stream, _GET, 6);
+    if (count < 0)
+    {
+        if (debug)
+            printf("###### WRITE STREAM ERROR ######\nEXITING\n");
+        exit(1);
+    }
+    usleep(80000);
+    count = read(stream, (void *)inbuff, 6);
+    if (count < 0)
+    {
+        if (debug)
+            printf("###### READ ERROR ######\nEXITING\n");
+        exit(1);
+    }
+    if (debug)
+    {
+        for (int j = 0; j < 6; ++j)
+        {
+            printf("inbuff[%d] = 0x%X == GET_ACK = 0x%X\n",
+                   j, inbuff[j], _GET_ACK[j]);
+        }
+    }
+    if (inbuff[0] == _GET_ACK[0] && inbuff[1] == _GET_ACK[1] && inbuff[2] == _GET_ACK[2])
+    {
+        usleep(50000);
+        count = read(stream, (void *)inbuff, 6);
+        if (debug)
+        {
+            for (int j = 0; j < 6; ++j)
+            {
+                printf("inbuff[%d] = 0x%X == SYNCREP = 0x%X\n", j, inbuff[j], _DATA[j]);
+            }
+        }
+        if (count < 0)
+        {
+            if (debug)
+                printf("###### READ ERROR ######\nEXITING\n");
+            exit(1);
+        }
+        if (inbuff[0] == _DATA[0] && inbuff[1] == _DATA[1] && inbuff[2] == _DATA[2])
+        {
+            usleep(50000);
+            size += inbuff[3];
+            temp = inbuff[4];
+            temp = temp * 256;
+            size += temp;
+            temp = inbuff[5];
+            temp = temp * 65536;
+            size += temp;
+            if (debug)
+                printf("size = %d\n", size); //FILESIZE in bytes
+            count = write(stream, _DACK, 6);
+            if (count < 0)
+            {
+                if (debug)
+                    printf("###### WRITE FILE ERROR ######\nEXITING\n");
+                exit(1);
+            }
+            usleep(50000);
+            count = read(stream, (void *)received, 512);
+            if (count < 0)
+            {
+                if (debug)
+                    printf("###### READ ERROR ######\nEXITING\n");
+                exit(1);
+            }
+            temp = received[3];
+            size = received[4];
+            temp *= 256;
+            size += temp;
+            _DACK[4] = received[0];
+            _DACK[5] = received[1];
+            int ii = 0;
+            int tot = 0;
+            while (pcknum != 0)
+            {
+                char tempr[506];
+                int j = 0;
+                for (int k = 4; k < 510; k++)
+                {
+                    tempr[j] = received[k];
+                    j++;
+                }
+                memcpy(&(mem[ii]), tempr, 506);
+                ii += 506;
+                if (write(stream, _DACK, 6) < 0)
+                {
+                    if (debug)
+                        printf("Failed to Write.");
+                    exit(1);
+                }
+                usleep(50000);
+                count = read(stream, (void *)received, 512);
+                _DACK[4] = received[0];
+                _DACK[5] = received[1];
+                if (debug)
+                    printf("pckgsize = %d\n", count);
+                pcknum = count;
+                tot += pcknum;
+                if (count < 0)
+                {
+                    if (debug)
+                        printf("###### READ ERROR ######\nEXITING\n");
+                    exit(1);
+                }
+            }
+            if (write(stream, _DACK, 6) < 0)
+            {
+                if (debug)
+                    printf("Failed to Write.");
+                exit(1);
+            }
+            return tot;
+        }
+    }
+    if (debug)
+        printf("failed.\n");
+    return 0;
+}
+
 #ifdef UNIT_TEST
+#include <stdlib.h>
 int main()
 {
-    ucam cam;
-    ucam_init(&cam, "/dev/ttyS0", B115200, -1);
-    ucam_destroy(&cam);
+    ucam dev;
+    if (ucam_init(&dev, "/dev/ttyS0", B115200, 11) < 0)
+    {
+        printf("Failed to init, exiting\n");
+        return -1;
+    }
+    dev.pic_mode = 0x0; // compressed jpeg
+    dev.img_fmt = 0x7;  // jpeg
+    dev.jpg_res = UCAM_JPG_480p;
+    dev.raw_res = 0;
+    dev.pkg_sz = 512;
+    dev.skip_frames = 0;
+    if (ucam_sync(&dev) < 0)
+    {
+        printf("Failed to sync, exiting\n");
+        return -1;
+    }
+    ucam_config(&dev, UCAM_INIT);
+    ucam_config(&dev, UCAM_SET_PACK_SZ);
+    ssize_t len = 0;
+    len = ucam_snap_picture(&dev, &len);
+    fprintf(stderr, "snapped picture: length %ld, ", len);
+    if (len > 0)
+    {
+        unsigned char *img_data = (unsigned char *)malloc(len);
+        ucam_get_data(&dev, img_data, len, 1);
+        fprintf(stderr, "got data, ");
+        free(img_data);
+    }
+    fprintf(stderr, "\n");
+    ucam_destroy(&dev);
+    printf("%s: Destroyed ucam\n", __func__);
     return 0;
 }
 #endif
